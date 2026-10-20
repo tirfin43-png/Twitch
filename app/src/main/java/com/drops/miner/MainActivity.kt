@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
-    private var targetGame = "rust"
+    private var targetGame = "world-of-tanks"
 
     private val optimizeScript = """
         (function() {
@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val gameInput = EditText(this).apply {
-            hint = "slug игры (rust, dota-2)"
+            hint = "игра (напр. rust, dota-2)"
             setHintTextColor(Color.parseColor("#ADADB8"))
             setTextColor(Color.WHITE)
             setText(targetGame)
@@ -93,7 +93,8 @@ class MainActivity : AppCompatActivity() {
                 marginEnd = 12
             }
             setOnClickListener {
-                targetGame = gameInput.text.toString().trim().lowercase()
+                // Автоматически заменяем пробелы на дефисы
+                targetGame = gameInput.text.toString().trim().lowercase().replace(" ", "-")
                 startFarmingDirectory()
             }
         }
@@ -133,8 +134,6 @@ class MainActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.javaScriptCanOpenWindowsAutomatically = true
 
-        // Превращаем WebView в чистый Google Chrome для Android:
-        // Вырезаем маркеры "; wv" и "Version/4.0", по которым Twitch блокирует авторизацию
         val originalUserAgent = settings.userAgentString
         settings.userAgentString = originalUserAgent
             .replace("; wv", "")
@@ -150,8 +149,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView.loadUrl("https://www.twitch.tv/login")
-        Toast.makeText(this, "Войдите в аккаунт Twitch", Toast.LENGTH_LONG).show()
+        // Загружаем сразу главную страницу
+        webView.loadUrl("https://www.twitch.tv")
     }
 
     override fun onPause() {
@@ -165,8 +164,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startFarmingDirectory() {
-        val directoryUrl = "https://www.twitch.tv/directory/game/$targetGame?tl=DropsEnabled"
+        // ИСПРАВЛЕНО: используем /category/ вместо устаревшего /game/
+        val directoryUrl = "https://www.twitch.tv/directory/category/$targetGame?tl=DropsEnabled"
         webView.loadUrl(directoryUrl)
+
+        Toast.makeText(this, "Ищем стримеров с Drops...", Toast.LENGTH_SHORT).show()
 
         handler.postDelayed({
             pickFirstStreamerWithDrops()
@@ -174,22 +176,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickFirstStreamerWithDrops() {
-        // Универсальный поиск первого доступного стримера на ПК и мобильной версиях
         val clickStreamerScript = """
             (function() {
                 var streamLink = document.querySelector('a[data-a-target="preview-card-image-link"]') 
                               || document.querySelector('article a')
-                              || document.querySelector('a[href^="/"][data-test-selector]');
+                              || document.querySelector('div[role="list"] a');
+
                 if (!streamLink) {
                     var links = document.querySelectorAll('a');
                     for (var i = 0; i < links.length; i++) {
-                        var href = links[i].getAttribute('href');
-                        if (href && href.length > 2 && !href.includes('/directory') && !href.includes('/p/') && !href.includes('/downloads')) {
-                            streamLink = links[i];
-                            break;
+                        var href = links[i].getAttribute('href') || '';
+                        if (href.startsWith('/') && href.length > 2 && 
+                            !href.includes('/directory') && 
+                            !href.includes('/p/') && 
+                            !href.includes('/downloads') &&
+                            !href.includes('/login')) {
+                            if (links[i].querySelector('img') || links[i].innerText.length > 0) {
+                                streamLink = links[i];
+                                break;
+                            }
                         }
                     }
                 }
+
                 if (streamLink) {
                     streamLink.click();
                     return "clicked";
@@ -200,7 +209,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.evaluateJavascript(clickStreamerScript) { result ->
             if (result != null && result.contains("clicked")) {
-                Toast.makeText(this, "Включили стрим с дропсами", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Стрим запущен!", Toast.LENGTH_SHORT).show()
             }
         }
     }
