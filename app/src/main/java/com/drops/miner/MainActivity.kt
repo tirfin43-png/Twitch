@@ -16,9 +16,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
-    private var targetGame = "rust" // Значение по умолчанию (slug игры в Twitch)
+    private var targetGame = "rust" // Игра по умолчанию
 
-    // JS-скрипт для отключения качества видео и экономии трафика/батареи
+    // Скрипт для заглушки звука (чтобы не перебивал TikTok/игры)
     private val optimizeScript = """
         (function() {
             var videos = document.getElementsByTagName('video');
@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
         })();
     """.trimIndent()
 
-    // JS-скрипт для авто-клейма наград в инвентаре Drops
+    // Скрипт для автоматического нажатия на кнопку "Получить" (Claim)
     private val claimDropsScript = """
         (function() {
             var buttons = document.querySelectorAll('button');
@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
         })();
     """.trimIndent()
 
-    // Проверка, идет ли стрим, или он офлайн
+    // Скрипт проверки статуса стримера (онлайн или оффлайн)
     private val checkStreamOnlineScript = """
         (function() {
             var offlineIndicator = document.querySelector('.channel-status-info--offline');
@@ -59,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Разметка интерфейса программно (без XML файлов верстки)
+        // Создаем интерфейс без необходимости лезть в XML файлы
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -69,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val gameInput = EditText(this).apply {
-            hint = "Введите slug игры (напр. rust, apex-legends)"
+            hint = "slug игры (напр. rust, dota-2)"
             setText(targetGame)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -83,7 +83,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val inventoryBtn = Button(this).apply {
-            text = "Drops"
+            text = "Инвентарь"
             setOnClickListener {
                 webView.loadUrl("https://www.twitch.tv/drops/inventory")
             }
@@ -100,11 +100,11 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
 
-        // Запуск Foreground сервиса для стабильной работы
+        // Запуск службы в шторке Android
         val serviceIntent = Intent(this, DropFarmerService::class.java)
         startForegroundService(serviceIntent)
 
-        // Фоновый цикл (каждые 4 минуты проверяет состояние и клеймит дропсы)
+        // Запуск бесконечного цикла проверки
         startAutomationLoop()
     }
 
@@ -113,8 +113,9 @@ class MainActivity : AppCompatActivity() {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        // Разрешаем видео играть в фоне без нажатия по экрану:
         settings.mediaPlaybackRequiresUserGesture = false
-        // Используем Desktop UserAgent для корректной навигации по тегам Drops
+        // Притворяемся компьютером, чтобы был доступен весь функционал Twitch
         settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         CookieManager.getInstance().setAcceptCookie(true)
@@ -127,17 +128,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Открываем Twitch (потребуется один раз вручную залогиниться)
+        // Открываем страницу авторизации
         webView.loadUrl("https://www.twitch.tv/login")
-        Toast.makeText(this, "Войдите в аккаунт Twitch для старта", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "Войдите в свой Twitch аккаунт!", Toast.LENGTH_LONG).show()
+    }
+
+    // Защита от засыпания при переходе в TikTok / другие приложения:
+    override fun onPause() {
+        super.onPause()
+        webView.resumeTimers() // Не даем таймерам страницы уснуть
+    }
+
+    override fun onStop() {
+        super.onStop()
+        webView.resumeTimers() // Принудительно держим страницу бодрой в фоне
     }
 
     private fun startFarmingDirectory() {
-        // Переход в каталог игры с фильтром по тегу Drops
         val directoryUrl = "https://www.twitch.tv/directory/game/$targetGame?tl=DropsEnabled"
         webView.loadUrl(directoryUrl)
 
-        // Через 7 секунд выбираем первого стримера
+        // Ждем 7 секунд для прогрузки списка и кликаем на первого стримера
         handler.postDelayed({
             pickFirstStreamerWithDrops()
         }, 7000)
@@ -156,8 +167,8 @@ class MainActivity : AppCompatActivity() {
         """.trimIndent()
 
         webView.evaluateJavascript(clickStreamerScript) { result ->
-            if (result.contains("clicked")) {
-                Toast.makeText(this, "Переключились на стримера", Toast.LENGTH_SHORT).show()
+            if (result != null && result.contains("clicked")) {
+                Toast.makeText(this, "Включили стрим с дропсами", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -167,25 +178,27 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 val currentUrl = webView.url ?: ""
 
-                // 1. Если смотрим стрим — проверяем, не офлайн ли он
+                // 1. Проверяем, не выключил ли стример трансляцию
                 if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
                     webView.evaluateJavascript(checkStreamOnlineScript) { status ->
-                        if (status.contains("offline")) {
-                            // Стример выключил трансляцию — ищем следующего
+                        if (status != null && status.contains("offline")) {
+                            // Если оффлайн — ищем нового стримера
                             startFarmingDirectory()
                         }
                     }
+                    // Повторно выключаем звук на случай, если плеер обновился
                     webView.evaluateJavascript(optimizeScript, null)
                 }
 
-                // 2. Периодически клеймим дропсы
+                // 2. Проверяем наличие кнопки забрать дропс
                 webView.evaluateJavascript(claimDropsScript) { count ->
                     if (count != null && count != "null" && count != "0") {
-                        Toast.makeText(applicationContext, "Забрали $count Drops!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(applicationContext, "Дропс забран!", Toast.LENGTH_SHORT).show()
                     }
                 }
 
-                handler.postDelayed(this, 180000) // Повтор каждые 3 минуты
+                // Запуск каждые 3 минуты (180000 миллисекунд)
+                handler.postDelayed(this, 180000)
             }
         }, 180000)
     }
