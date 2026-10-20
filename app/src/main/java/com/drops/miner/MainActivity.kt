@@ -58,13 +58,11 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Основной контейнер с темным фоном
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#18181B"))
         }
 
-        // Панель управления с аккуратными отступами
         val inputLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -72,7 +70,6 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#1F1F23"))
         }
 
-        // Поле ввода игры
         val gameInput = EditText(this).apply {
             hint = "slug игры (rust, dota-2)"
             setHintTextColor(Color.parseColor("#ADADB8"))
@@ -85,7 +82,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Кнопка Старт в фирменном фиолетовом цвете Twitch
         val startBtn = Button(this).apply {
             text = "Старт"
             setTextColor(Color.WHITE)
@@ -102,7 +98,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Кнопка Drops
         val inventoryBtn = Button(this).apply {
             text = "Drops"
             setTextColor(Color.WHITE)
@@ -134,8 +129,16 @@ class MainActivity : AppCompatActivity() {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        settings.databaseEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
-        settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        settings.javaScriptCanOpenWindowsAutomatically = true
+
+        // Превращаем WebView в чистый Google Chrome для Android:
+        // Вырезаем маркеры "; wv" и "Version/4.0", по которым Twitch блокирует авторизацию
+        val originalUserAgent = settings.userAgentString
+        settings.userAgentString = originalUserAgent
+            .replace("; wv", "")
+            .replace("Version/4.0 ", "")
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -171,9 +174,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickFirstStreamerWithDrops() {
+        // Универсальный поиск первого доступного стримера на ПК и мобильной версиях
         val clickStreamerScript = """
             (function() {
-                var streamLink = document.querySelector('a[data-a-target="preview-card-image-link"]');
+                var streamLink = document.querySelector('a[data-a-target="preview-card-image-link"]') 
+                              || document.querySelector('article a')
+                              || document.querySelector('a[href^="/"][data-test-selector]');
+                if (!streamLink) {
+                    var links = document.querySelectorAll('a');
+                    for (var i = 0; i < links.length; i++) {
+                        var href = links[i].getAttribute('href');
+                        if (href && href.length > 2 && !href.includes('/directory') && !href.includes('/p/') && !href.includes('/downloads')) {
+                            streamLink = links[i];
+                            break;
+                        }
+                    }
+                }
                 if (streamLink) {
                     streamLink.click();
                     return "clicked";
@@ -184,7 +200,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.evaluateJavascript(clickStreamerScript) { result ->
             if (result != null && result.contains("clicked")) {
-                Toast.makeText(this, "Переключились на стримера", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Включили стрим с дропсами", Toast.LENGTH_SHORT).show()
             }
         }
     }
