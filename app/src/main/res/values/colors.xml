@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="twitch_purple">#9146FF</color>
+    <color name="twitch_dark">#18181B</color>
+    <color name="twitch_input_bg">#26262C</color>
+    <color name="white">#FFFFFF</color>
+</resources>
