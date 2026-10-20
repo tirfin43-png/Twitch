@@ -3,6 +3,7 @@ package com.drops.miner
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,67 +12,124 @@ import android.webkit.*
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var statusText: TextView
     private val handler = Handler(Looper.getMainLooper())
-    private var targetGame = "world-of-tanks"
 
-    private val optimizeScript = """
+    private var targetGame = "world-of-tanks"
+    private var currentStreamer = ""
+    private var minutesWatched = 0
+    private var isFarming = false
+    private var activeDropTitle = "Поиск наград..."
+    private var activeDropProgress = "0%"
+
+    private val keepAliveScript = """
         (function() {
-            var videos = document.getElementsByTagName('video');
-            for(var i=0; i<videos.length; i++){
-                videos[i].muted = true;
-                videos[i].volume = 0;
+            var v = document.querySelector('video');
+            if (v) {
+                v.muted = true;
+                v.volume = 0;
+                if (v.paused) v.play();
             }
         })();
     """.trimIndent()
 
-    private val claimDropsScript = """
-        (function() {
-            var buttons = document.querySelectorAll('button');
-            var claimed = 0;
-            buttons.forEach(function(btn) {
-                if (btn.innerText.includes('Claim') || btn.innerText.includes('Получить')) {
-                    btn.click();
-                    claimed++;
-                }
-            });
-            return claimed;
-        })();
-    """.trimIndent()
+    private fun getAnalyzeInventoryScript(game: String): String {
+        return """
+            (function(gameQuery) {
+                var claimButtons = document.querySelectorAll('button');
+                var claimedCount = 0;
+                claimButtons.forEach(function(b) {
+                    var t = (b.innerText || '').toLowerCase();
+                    if (t.includes('claim') || t.includes('получить')) {
+                        b.click();
+                        claimedCount++;
+                    }
+                });
 
-    private val checkStreamOnlineScript = """
-        (function() {
-            var offlineIndicator = document.querySelector('.channel-status-info--offline');
-            var videoPlayer = document.querySelector('video');
-            if (offlineIndicator !== null) return "offline";
-            if (!videoPlayer) return "loading";
-            return "online";
-        })();
-    """.trimIndent()
+                var gameClean = gameQuery.toLowerCase().replace(/-/g, ' ');
+                var allLinks = document.querySelectorAll('a');
+                var targetChannelUrl = null;
+                var dropName = "";
+                var progressText = "";
+                var allCompleted = true;
+                var foundAnyForGame = false;
+
+                for (var i = 0; i < allLinks.length; i++) {
+                    var a = allLinks[i];
+                    var href = a.getAttribute('href') || '';
+                    var text = (a.innerText || '').toLowerCase();
+
+                    if (href.includes('/directory/category/') || href.includes('tl=DropsEnabled') || text.includes('участвующ') || text.includes('participating')) {
+                        var card = a.closest('div[style*="border"], div[class*="card"], div[class*="inventory"]') || a.parentElement.parentElement;
+                        var cardText = card ? (card.innerText || '').toLowerCase() : '';
+
+                        if (cardText.includes(gameClean) || href.toLowerCase().includes(gameQuery.toLowerCase())) {
+                            foundAnyForGame = true;
+
+                            if (cardText.includes('получено') || cardText.includes('claimed') || cardText.includes('100%')) {
+                                continue;
+                            }
+
+                            allCompleted = false;
+                            targetChannelUrl = a.href;
+                            
+                            var titleElem = card ? card.querySelector('h3, h4, p, strong') : null;
+                            dropName = titleElem ? titleElem.innerText : 'Награда Drops';
+
+                            var match = cardText.match(/(\d+)%/);
+                            if (match) {
+                                progressText = match[1] + '%';
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                return JSON.stringify({
+                    claimed: claimedCount,
+                    hasPending: targetChannelUrl !== null,
+                    targetUrl: targetChannelUrl,
+                    dropName: dropName,
+                    progress: progressText,
+                    allCompleted: foundAnyForGame && allCompleted
+                });
+            })('$game');
+        """.trimIndent()
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val layout = LinearLayout(this).apply {
+        // Запрашиваем разрешение на показ уведомлений для Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
+        val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#18181B"))
         }
 
-        val inputLayout = LinearLayout(this).apply {
+        val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(24, 24, 24, 24)
+            setPadding(24, 16, 24, 16)
             setBackgroundColor(Color.parseColor("#1F1F23"))
         }
 
         val gameInput = EditText(this).apply {
-            hint = "игра (напр. rust, dota-2)"
+            hint = "игра (world-of-tanks, rust)"
             setHintTextColor(Color.parseColor("#ADADB8"))
             setTextColor(Color.WHITE)
             setText(targetGame)
@@ -83,19 +141,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         val startBtn = Button(this).apply {
-            text = "Старт"
+            text = "АВТО-СТАРТ"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#9146FF"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginEnd = 12
-            }
             setOnClickListener {
-                // Автоматически заменяем пробелы на дефисы
                 targetGame = gameInput.text.toString().trim().lowercase().replace(" ", "-")
-                startFarmingDirectory()
+                startSmartFarmingCycle()
             }
         }
 
@@ -103,26 +154,41 @@ class MainActivity : AppCompatActivity() {
             text = "Drops"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#3A3A3D"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = 8 }
             setOnClickListener {
+                isFarming = false
+                statusText.text = "Инвентарь наград"
                 webView.loadUrl("https://www.twitch.tv/drops/inventory")
             }
         }
 
-        inputLayout.addView(gameInput)
-        inputLayout.addView(startBtn)
-        inputLayout.addView(inventoryBtn)
-        layout.addView(inputLayout)
+        topBar.addView(gameInput)
+        topBar.addView(startBtn)
+        topBar.addView(inventoryBtn)
+        mainLayout.addView(topBar)
+
+        statusText = TextView(this).apply {
+            text = "⚪ Нажмите «АВТО-СТАРТ» для автоматического фарма"
+            setTextColor(Color.parseColor("#00FF7F"))
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(24, 14, 24, 14)
+            setBackgroundColor(Color.parseColor("#0E0E10"))
+        }
+        mainLayout.addView(statusText)
 
         webView = WebView(this)
-        layout.addView(webView, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT)
-        setContentView(layout)
+        mainLayout.addView(webView, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT)
+        setContentView(mainLayout)
 
         setupWebView()
 
         val serviceIntent = Intent(this, DropFarmerService::class.java)
         startForegroundService(serviceIntent)
 
-        startAutomationLoop()
+        startAutoPilotLoop()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -145,11 +211,14 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                webView.evaluateJavascript(optimizeScript, null)
+                val currentUrl = url ?: ""
+                if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
+                    currentStreamer = currentUrl.substringAfterLast("/").substringBefore("?").lowercase()
+                }
+                webView.evaluateJavascript(keepAliveScript, null)
             }
         }
 
-        // Загружаем сразу главную страницу
         webView.loadUrl("https://www.twitch.tv")
     }
 
@@ -163,20 +232,74 @@ class MainActivity : AppCompatActivity() {
         webView.resumeTimers()
     }
 
-    private fun startFarmingDirectory() {
-        // ИСПРАВЛЕНО: используем /category/ вместо устаревшего /game/
-        val directoryUrl = "https://www.twitch.tv/directory/category/$targetGame?tl=DropsEnabled"
-        webView.loadUrl(directoryUrl)
-
-        Toast.makeText(this, "Ищем стримеров с Drops...", Toast.LENGTH_SHORT).show()
+    private fun startSmartFarmingCycle() {
+        isFarming = true
+        minutesWatched = 0
+        statusText.text = "🔍 Сканируем инвентарь: ищем активные Drops..."
+        syncNotification()
+        webView.loadUrl("https://www.twitch.tv/drops/inventory")
 
         handler.postDelayed({
-            pickFirstStreamerWithDrops()
-        }, 7000)
+            if (!isFarming) return@postDelayed
+            evaluateInventoryAndSelectStreamer()
+        }, 6000)
     }
 
-    private fun pickFirstStreamerWithDrops() {
-        val clickStreamerScript = """
+    private fun evaluateInventoryAndSelectStreamer() {
+        webView.evaluateJavascript(getAnalyzeInventoryScript(targetGame)) { result ->
+            try {
+                val cleanJson = result.removeSurrounding("\"").replace("\\\"", "\"")
+                val json = JSONObject(cleanJson)
+
+                val claimedCount = json.optInt("claimed", 0)
+                if (claimedCount > 0) {
+                    Toast.makeText(this, "🎉 Забран готовый дропс ($claimedCount шт)!", Toast.LENGTH_LONG).show()
+                }
+
+                val allCompleted = json.optBoolean("allCompleted", false)
+                if (allCompleted) {
+                    statusText.text = "🏆 Все доступные Drops по $targetGame получены!"
+                    activeDropTitle = "Все награды получены!"
+                    activeDropProgress = "100%"
+                    syncNotification()
+                    isFarming = false
+                    return@evaluateJavascript
+                }
+
+                val hasPending = json.optBoolean("hasPending", false)
+                if (hasPending) {
+                    val targetUrl = json.getString("targetUrl")
+                    activeDropTitle = json.optString("dropName", "Награда")
+                    activeDropProgress = json.optString("progress", "0%")
+
+                    statusText.text = "🎯 Награда: $activeDropTitle ($activeDropProgress). Открываем стримеров..."
+                    syncNotification()
+                    webView.loadUrl(targetUrl)
+
+                    handler.postDelayed({
+                        if (isFarming) pickStreamerFromParticipatingList()
+                    }, 7000)
+                } else {
+                    statusText.text = "🔍 Награда не начата. Открываем каталог $targetGame..."
+                    val fallbackUrl = "https://www.twitch.tv/directory/category/$targetGame?tl=DropsEnabled"
+                    webView.loadUrl(fallbackUrl)
+
+                    handler.postDelayed({
+                        if (isFarming) pickStreamerFromParticipatingList()
+                    }, 7000)
+                }
+            } catch (e: Exception) {
+                val fallbackUrl = "https://www.twitch.tv/directory/category/$targetGame?tl=DropsEnabled"
+                webView.loadUrl(fallbackUrl)
+                handler.postDelayed({
+                    if (isFarming) pickStreamerFromParticipatingList()
+                }, 7000)
+            }
+        }
+    }
+
+    private fun pickStreamerFromParticipatingList() {
+        val clickScript = """
             (function() {
                 var streamLink = document.querySelector('a[data-a-target="preview-card-image-link"]') 
                               || document.querySelector('article a')
@@ -200,42 +323,62 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (streamLink) {
+                    var channel = streamLink.getAttribute('href').replace('/', '').split('?')[0];
                     streamLink.click();
-                    return "clicked";
+                    return channel;
                 }
                 return "not_found";
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript(clickStreamerScript) { result ->
-            if (result != null && result.contains("clicked")) {
-                Toast.makeText(this, "Стрим запущен!", Toast.LENGTH_SHORT).show()
+        webView.evaluateJavascript(clickScript) { result ->
+            val channel = result?.replace("\"", "") ?: "not_found"
+            if (channel != "not_found" && channel.isNotEmpty()) {
+                currentStreamer = channel
+                minutesWatched = 0
+                statusText.text = "🟢 Стрим: $currentStreamer | $activeDropTitle ($activeDropProgress) | ▶️ 0 мин"
+                syncNotification()
+            } else {
+                statusText.text = "⚠️ Стримеры с активными Drops сейчас не найдены."
             }
         }
     }
 
-    private fun startAutomationLoop() {
+    private fun syncNotification() {
+        DropFarmerService.updateProgress(
+            this,
+            activeDropTitle,
+            activeDropProgress,
+            currentStreamer,
+            minutesWatched
+        )
+    }
+
+    private fun startAutoPilotLoop() {
         handler.postDelayed(object : Runnable {
             override fun run() {
-                val currentUrl = webView.url ?: ""
+                if (isFarming) {
+                    val currentUrl = webView.url ?: ""
 
-                if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
-                    webView.evaluateJavascript(checkStreamOnlineScript) { status ->
-                        if (status != null && status.contains("offline")) {
-                            startFarmingDirectory()
+                    if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
+                        minutesWatched += 1
+                        statusText.text = "🟢 Стрим: $currentStreamer | $activeDropTitle ($activeDropProgress) | ▶️ $minutesWatched мин"
+                        webView.evaluateJavascript(keepAliveScript, null)
+
+                        // Синхронизируем статус в шторке уведомлений
+                        syncNotification()
+
+                        // Каждые 12 минут обновляем точный процент из инвентаря
+                        if (minutesWatched % 12 == 0) {
+                            statusText.text = "🔄 Проверка прогресса Drops..."
+                            startSmartFarmingCycle()
+                            return
                         }
                     }
-                    webView.evaluateJavascript(optimizeScript, null)
                 }
 
-                webView.evaluateJavascript(claimDropsScript) { count ->
-                    if (count != null && count != "null" && count != "0") {
-                        Toast.makeText(applicationContext, "Дропс забран!", Toast.LENGTH_SHORT).show()
-                    }
-                }
-
-                handler.postDelayed(this, 180000)
+                handler.postDelayed(this, 60000)
             }
-        }, 180000)
+        }, 60000)
     }
 }
