@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Фиолетовый фон Twitch -->
+    <path
+        android:fillColor="#9146FF"
+        android:pathData="M14,14h80v80h-80z"/>
+    <!-- Белый значок Twitch -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,28L24,36v40h16v8h8l8,-8h12l16,-16V28H32z M78,56l-8,8H56l-8,8v-8H40V34h38V56z"/>
+    <path
+        android:fillColor="#9146FF"
+        android:pathData="M64,42h6v12h-6z M50,42h6v12h-6z"/>
+</vector>
