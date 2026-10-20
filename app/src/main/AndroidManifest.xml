@@ -9,11 +9,11 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Twitch Drops Miner"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:label="Twitch Miner"
+        android:icon="@drawable/ic_app_icon"
+        android:roundIcon="@drawable/ic_app_icon"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+        android:theme="@style/Theme.TwitchDropsMiner">
         
         <activity
             android:name=".MainActivity"
