@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.TwitchDropsMiner" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/twitch_purple</item>
+        <item name="android:statusBarColor">@color/twitch_dark</item>
+        <item name="android:windowBackground">@color/twitch_dark</item>
+    </style>
+</resources>
