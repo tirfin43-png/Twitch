@@ -2,9 +2,11 @@ package com.drops.miner
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.webkit.*
 import android.widget.Button
 import android.widget.EditText
@@ -16,9 +18,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
-    private var targetGame = "rust" // Игра по умолчанию
+    private var targetGame = "rust"
 
-    // Скрипт для заглушки звука (чтобы не перебивал TikTok/игры)
     private val optimizeScript = """
         (function() {
             var videos = document.getElementsByTagName('video');
@@ -29,7 +30,6 @@ class MainActivity : AppCompatActivity() {
         })();
     """.trimIndent()
 
-    // Скрипт для автоматического нажатия на кнопку "Получить" (Claim)
     private val claimDropsScript = """
         (function() {
             var buttons = document.querySelectorAll('button');
@@ -44,7 +44,6 @@ class MainActivity : AppCompatActivity() {
         })();
     """.trimIndent()
 
-    // Скрипт проверки статуса стримера (онлайн или оффлайн)
     private val checkStreamOnlineScript = """
         (function() {
             var offlineIndicator = document.querySelector('.channel-status-info--offline');
@@ -59,31 +58,55 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Создаем интерфейс без необходимости лезть в XML файлы
+        // Основной контейнер с темным фоном
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#18181B"))
         }
 
+        // Панель управления с аккуратными отступами
         val inputLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#1F1F23"))
         }
 
+        // Поле ввода игры
         val gameInput = EditText(this).apply {
-            hint = "slug игры (напр. rust, dota-2)"
+            hint = "slug игры (rust, dota-2)"
+            setHintTextColor(Color.parseColor("#ADADB8"))
+            setTextColor(Color.WHITE)
             setText(targetGame)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setBackgroundColor(Color.parseColor("#26262C"))
+            setPadding(24, 16, 24, 16)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = 16
+            }
         }
 
+        // Кнопка Старт в фирменном фиолетовом цвете Twitch
         val startBtn = Button(this).apply {
             text = "Старт"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#9146FF"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = 12
+            }
             setOnClickListener {
                 targetGame = gameInput.text.toString().trim().lowercase()
                 startFarmingDirectory()
             }
         }
 
+        // Кнопка Drops
         val inventoryBtn = Button(this).apply {
-            text = "Инвентарь"
+            text = "Drops"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#3A3A3D"))
             setOnClickListener {
                 webView.loadUrl("https://www.twitch.tv/drops/inventory")
             }
@@ -100,11 +123,9 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
 
-        // Запуск службы в шторке Android
         val serviceIntent = Intent(this, DropFarmerService::class.java)
         startForegroundService(serviceIntent)
 
-        // Запуск бесконечного цикла проверки
         startAutomationLoop()
     }
 
@@ -113,9 +134,7 @@ class MainActivity : AppCompatActivity() {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        // Разрешаем видео играть в фоне без нажатия по экрану:
         settings.mediaPlaybackRequiresUserGesture = false
-        // Притворяемся компьютером, чтобы был доступен весь функционал Twitch
         settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         CookieManager.getInstance().setAcceptCookie(true)
@@ -128,27 +147,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Открываем страницу авторизации
         webView.loadUrl("https://www.twitch.tv/login")
-        Toast.makeText(this, "Войдите в свой Twitch аккаунт!", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "Войдите в аккаунт Twitch", Toast.LENGTH_LONG).show()
     }
 
-    // Защита от засыпания при переходе в TikTok / другие приложения:
     override fun onPause() {
         super.onPause()
-        webView.resumeTimers() // Не даем таймерам страницы уснуть
+        webView.resumeTimers()
     }
 
     override fun onStop() {
         super.onStop()
-        webView.resumeTimers() // Принудительно держим страницу бодрой в фоне
+        webView.resumeTimers()
     }
 
     private fun startFarmingDirectory() {
         val directoryUrl = "https://www.twitch.tv/directory/game/$targetGame?tl=DropsEnabled"
         webView.loadUrl(directoryUrl)
 
-        // Ждем 7 секунд для прогрузки списка и кликаем на первого стримера
         handler.postDelayed({
             pickFirstStreamerWithDrops()
         }, 7000)
@@ -168,7 +184,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.evaluateJavascript(clickStreamerScript) { result ->
             if (result != null && result.contains("clicked")) {
-                Toast.makeText(this, "Включили стрим с дропсами", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Переключились на стримера", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -178,26 +194,21 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 val currentUrl = webView.url ?: ""
 
-                // 1. Проверяем, не выключил ли стример трансляцию
                 if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
                     webView.evaluateJavascript(checkStreamOnlineScript) { status ->
                         if (status != null && status.contains("offline")) {
-                            // Если оффлайн — ищем нового стримера
                             startFarmingDirectory()
                         }
                     }
-                    // Повторно выключаем звук на случай, если плеер обновился
                     webView.evaluateJavascript(optimizeScript, null)
                 }
 
-                // 2. Проверяем наличие кнопки забрать дропс
                 webView.evaluateJavascript(claimDropsScript) { count ->
                     if (count != null && count != "null" && count != "0") {
                         Toast.makeText(applicationContext, "Дропс забран!", Toast.LENGTH_SHORT).show()
                     }
                 }
 
-                // Запуск каждые 3 минуты (180000 миллисекунд)
                 handler.postDelayed(this, 180000)
             }
         }, 180000)
