@@ -27,13 +27,11 @@ class MainActivity : AppCompatActivity() {
     private var currentStreamer = ""
     private var minutesWatched = 0
     private var isFarming = false
-    private var activeDropTitle = "Поиск активного Drops..."
-    private var activeDropProgress = "0%"
-
-    // Черный список стримеров
+    
+    // Переменные проверки реального прогресса
+    private var lastRecordedProgress = -1
+    private var streamWatchMinutes = 0
     private val blacklist = mutableSetOf<String>()
-    // Текст всех завершенных наград из инвентаря
-    private var completedRewardsText = ""
 
     private val keepAliveScript = """
         (function() {
@@ -46,34 +44,31 @@ class MainActivity : AppCompatActivity() {
         })();
     """.trimIndent()
 
-    // Сканер инвентаря: забирает награды и вытягивает текст ВСЕХ завершенных дропсов
-    private val scanCompletedDropsScript = """
+    // Скрипт быстрого считывания текущего процента дропса из инвентаря
+    private val getExactProgressScript = """
         (function() {
-            // 1. Забираем готовые дропсы
-            var claimButtons = document.querySelectorAll('button');
-            var claimedCount = 0;
-            claimButtons.forEach(function(b) {
+            var claimBtn = document.querySelector('button');
+            var buttons = document.querySelectorAll('button');
+            buttons.forEach(function(b) {
                 var t = (b.innerText || '').toLowerCase();
-                if (t.includes('claim') || t.includes('получить')) {
-                    b.click();
-                    claimedCount++;
-                }
+                if (t.includes('claim') || t.includes('получить')) b.click();
             });
 
-            // 2. Собираем весь текст из карточек со статусом "Получено" / "100%"
-            var completedText = "";
-            var allElements = document.querySelectorAll('div, section, article');
-            allElements.forEach(function(el) {
-                var txt = (el.innerText || '').toLowerCase();
-                if ((txt.includes('получено') || txt.includes('claimed') || txt.includes('100%')) && txt.length < 600) {
-                    completedText += " " + txt;
-                }
-            });
+            var text = document.body.innerText || "";
+            var matches = text.match(/(\d+)%/g);
+            var maxProgress = -1;
 
-            return JSON.stringify({
-                claimed: claimedCount,
-                completedBlob: completedText
-            });
+            if (matches) {
+                matches.forEach(function(m) {
+                    var val = parseInt(m.replace('%', ''));
+                    // Ищем активный прогресс от 0 до 99%
+                    if (val >= 0 && val < 100 && val > maxProgress) {
+                        maxProgress = val;
+                    }
+                });
+            }
+
+            return maxProgress;
         })();
     """.trimIndent()
 
@@ -92,7 +87,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#18181B"))
         }
 
-        // РЯД 1: Поле игры и кнопка Авто-Старт
+        // РЯД 1: Поле игры и кнопка Старт
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -118,6 +113,8 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#9146FF"))
             setOnClickListener {
                 targetGame = gameInput.text.toString().trim().lowercase().replace(" ", "-")
+                blacklist.clear()
+                lastRecordedProgress = -1
                 startSmartFarmingCycle()
             }
         }
@@ -126,7 +123,7 @@ class MainActivity : AppCompatActivity() {
         topBar.addView(startBtn)
         mainLayout.addView(topBar)
 
-        // РЯД 2: Ручной пропуск и Drops
+        // РЯД 2: Кнопка ручного пропуска и Drops
         val row2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -142,11 +139,7 @@ class MainActivity : AppCompatActivity() {
                 marginEnd = 8
             }
             setOnClickListener {
-                if (currentStreamer.isNotEmpty()) {
-                    blacklist.add(currentStreamer.lowercase())
-                    Toast.makeText(applicationContext, "$currentStreamer заблокирован вручную", Toast.LENGTH_SHORT).show()
-                }
-                openDirectoryAndPickValidStreamer()
+                skipCurrentStreamer("вручную")
             }
         }
 
@@ -188,7 +181,7 @@ class MainActivity : AppCompatActivity() {
         val serviceIntent = Intent(this, DropFarmerService::class.java)
         startForegroundService(serviceIntent)
 
-        startAutoPilotLoop()
+        startProgressWatchdogLoop()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -232,61 +225,45 @@ class MainActivity : AppCompatActivity() {
         webView.resumeTimers()
     }
 
-    // 1. Сканируем инвентарь и собираем имена всех завершенных стримеров
     private fun startSmartFarmingCycle() {
         isFarming = true
         minutesWatched = 0
-        statusText.text = "🔍 Сканируем инвентарь: ищем завершенные Drops..."
+        streamWatchMinutes = 0
+        statusText.text = "🔍 Проверяем текущий процент в инвентаре..."
         syncNotification()
         webView.loadUrl("https://www.twitch.tv/drops/inventory")
 
+        // 4 секунды на считывание процента
         handler.postDelayed({
             if (!isFarming) return@postDelayed
             
-            webView.evaluateJavascript(scanCompletedDropsScript) { result ->
-                try {
-                    val cleanJson = result.removeSurrounding("\"").replace("\\\"", "\"")
-                    val json = JSONObject(cleanJson)
-
-                    val claimedCount = json.optInt("claimed", 0)
-                    if (claimedCount > 0) {
-                        Toast.makeText(this, "🎉 Забран готовый дропс ($claimedCount шт)!", Toast.LENGTH_LONG).show()
-                    }
-
-                    // Сохраняем весь текст завершенных наград
-                    completedRewardsText = json.optString("completedBlob", "").lowercase()
-                } catch (e: Exception) {
-                    completedRewardsText = ""
+            webView.evaluateJavascript(getExactProgressScript) { res ->
+                val progressVal = res?.replace("\"", "")?.toIntOrNull() ?: -1
+                if (progressVal != -1) {
+                    lastRecordedProgress = progressVal
                 }
-
-                // Идем в каталог выбирать стримера
-                openDirectoryAndPickValidStreamer()
+                openDirectoryAndPickStreamer()
             }
-        }, 5000)
+        }, 4000)
     }
 
-    private fun openDirectoryAndPickValidStreamer() {
-        statusText.text = "🔍 Ищем стримера по $targetGame с доступным дропсом..."
+    private fun openDirectoryAndPickStreamer() {
+        statusText.text = "🔍 Ищем доступного стримера по $targetGame..."
         val directoryUrl = "https://www.twitch.tv/directory/category/$targetGame?tl=DropsEnabled"
         webView.loadUrl(directoryUrl)
 
         handler.postDelayed({
-            if (isFarming) pickStreamerExcludingCompleted()
-        }, 7000)
+            if (isFarming) pickNextStreamer()
+        }, 6000)
     }
 
-    // 2. Проверяем каждого стримера: если он есть в тексте полученных наград — ПРОПУСКАЕМ!
-    private fun pickStreamerExcludingCompleted() {
+    private fun pickNextStreamer() {
         val blacklistJson = "[" + blacklist.joinToString(",") { "\"$it\"" } + "]"
-        val completedEscaped = completedRewardsText.replace("\"", "\\\"").replace("\n", " ")
 
         val clickScript = """
-            (function(blacklisted, completedBlob) {
+            (function(blacklisted) {
                 var links = document.querySelectorAll('a[data-a-target="preview-card-image-link"], article a, div[role="list"] a');
-
-                if (!links || links.length === 0) {
-                    links = document.querySelectorAll('a');
-                }
+                if (!links || links.length === 0) links = document.querySelectorAll('a');
 
                 for (var i = 0; i < links.length; i++) {
                     var href = links[i].getAttribute('href') || '';
@@ -298,62 +275,55 @@ class MainActivity : AppCompatActivity() {
                         
                         var channel = href.replace('/', '').toLowerCase().split('?')[0];
 
-                        // 1. Проверяем ручной черный список
-                        if (blacklisted.includes(channel)) {
-                            continue;
+                        // Пропускаем заблокированных
+                        if (!blacklisted.includes(channel)) {
+                            links[i].click();
+                            return channel;
                         }
-
-                        // 2. ГЛАВНАЯ ПРОВЕРКА: упоминается ли стример в тексте забранных наград?
-                        if (completedBlob.length > 0 && completedBlob.includes(channel)) {
-                            // Этот стример УЖЕ ПОЛУЧЕН! Пропускаем его!
-                            return "auto_skip:" + channel;
-                        }
-
-                        // Нашли живого стримера, где награда еще НЕ получена!
-                        links[i].click();
-                        return channel;
                     }
                 }
                 return "not_found";
-            })($blacklistJson, "$completedEscaped");
+            })($blacklistJson);
         """.trimIndent()
 
         webView.evaluateJavascript(clickScript) { result ->
-            val res = result?.replace("\"", "") ?: "not_found"
-
-            if (res.startsWith("auto_skip:")) {
-                val skippedChannel = res.substringAfter("auto_skip:")
-                blacklist.add(skippedChannel.lowercase())
-                statusText.text = "⏭️ $skippedChannel уже получен в инвентаре! Берем следующего..."
-                Toast.makeText(this, "$skippedChannel уже завершен. Пропускаем...", Toast.LENGTH_SHORT).show()
-                // Сразу ищем дальше без этого стримера
-                pickStreamerExcludingCompleted()
-                return@evaluateJavascript
-            }
-
-            if (res != "not_found" && res.isNotEmpty()) {
-                currentStreamer = res
-                minutesWatched = 0
-                activeDropTitle = "Фарминг $targetGame"
-                statusText.text = "🟢 Стрим: $currentStreamer | ▶️ Дропс активен (0 мин) | В блоке: ${blacklist.size}"
+            val channel = result?.replace("\"", "") ?: "not_found"
+            if (channel != "not_found" && channel.isNotEmpty()) {
+                currentStreamer = channel
+                streamWatchMinutes = 0
+                val progStr = if (lastRecordedProgress >= 0) "$lastRecordedProgress%" else "..."
+                statusText.text = "🟢 Стрим: $currentStreamer | Дропс: $progStr | Проверка прогресса..."
                 syncNotification()
+                Toast.makeText(this, "Включили $currentStreamer. Проверяем начисление...", Toast.LENGTH_SHORT).show()
             } else {
-                statusText.text = "⚠️ Все активные стримеры уже завершены или оффлайн."
+                statusText.text = "⚠️ Все стримеры с Drops в черном списке или оффлайн."
             }
         }
     }
 
+    private fun skipCurrentStreamer(reason: String) {
+        if (currentStreamer.isNotEmpty()) {
+            blacklist.add(currentStreamer.lowercase())
+            Toast.makeText(applicationContext, "$currentStreamer пропущен ($reason)", Toast.LENGTH_SHORT).show()
+        }
+        statusText.text = "⏭️ Пропуск $currentStreamer ($reason), ищем следующего..."
+        streamWatchMinutes = 0
+        openDirectoryAndPickStreamer()
+    }
+
     private fun syncNotification() {
+        val progStr = if (lastRecordedProgress >= 0) "$lastRecordedProgress%" else "Фарминг"
         DropFarmerService.updateProgress(
             this,
-            activeDropTitle,
-            activeDropProgress,
+            "Drops $targetGame",
+            progStr,
             currentStreamer,
             minutesWatched
         )
     }
 
-    private fun startAutoPilotLoop() {
+    // Сторожевой таймер: каждую минуту следит за стримом, каждые 2.5 минуты проверяет, идет ли прогресс
+    private fun startProgressWatchdogLoop() {
         handler.postDelayed(object : Runnable {
             override fun run() {
                 if (isFarming) {
@@ -361,12 +331,22 @@ class MainActivity : AppCompatActivity() {
 
                     if (!currentUrl.contains("/directory/") && !currentUrl.contains("/drops/")) {
                         minutesWatched += 1
-                        statusText.text = "🟢 Стрим: $currentStreamer | ▶️ Время: $minutesWatched мин | В блоке: ${blacklist.size}"
+                        streamWatchMinutes += 1
+                        
+                        val progStr = if (lastRecordedProgress >= 0) "$lastRecordedProgress%" else "..."
+                        statusText.text = "🟢 Стрим: $currentStreamer | Дропс: $progStr | Смотрим: ${streamWatchMinutes}м | Блок: ${blacklist.size}"
                         webView.evaluateJavascript(keepAliveScript, null)
                         syncNotification()
 
-                        // Каждые 12 минут проверяем инвентарь и забираем готовые награды
-                        if (minutesWatched % 12 == 0) {
+                        // КОНТРОЛЬ: если смотрим стримера уже 2.5 минуты — быстро проверяем, сдвинулся ли прогресс
+                        if (streamWatchMinutes == 2) {
+                            statusText.text = "🔎 Проверяем: идут ли проценты на стриме $currentStreamer..."
+                            checkIfProgressActuallyIncreased()
+                            return
+                        }
+
+                        // Каждые 12 минут плановый сбор наград
+                        if (streamWatchMinutes >= 12) {
                             startSmartFarmingCycle()
                             return
                         }
@@ -376,5 +356,32 @@ class MainActivity : AppCompatActivity() {
                 handler.postDelayed(this, 60000)
             }
         }, 60000)
+    }
+
+    // Быстрая фоновая проверка инвентаря
+    private fun checkIfProgressActuallyIncreased() {
+        val savedStreamer = currentStreamer
+        webView.loadUrl("https://www.twitch.tv/drops/inventory")
+
+        handler.postDelayed({
+            if (!isFarming) return@postDelayed
+
+            webView.evaluateJavascript(getExactProgressScript) { res ->
+                val newProgress = res?.replace("\"", "")?.toIntOrNull() ?: -1
+
+                // Сравниваем: если процент НЕ изменился или дропса вообще нет
+                if (newProgress != -1 && lastRecordedProgress != -1 && newProgress <= lastRecordedProgress) {
+                    // ПРОГРЕСС НЕ ИДЕТ! Стример пустышка!
+                    blacklist.add(savedStreamer.lowercase())
+                    Toast.makeText(applicationContext, "⚠️ На $savedStreamer дропс не идет! Меняем стримера...", Toast.LENGTH_LONG).show()
+                    openDirectoryAndPickStreamer()
+                } else {
+                    // Прогресс идет! Запоминаем новый процент и возвращаемся на стрим
+                    if (newProgress != -1) lastRecordedProgress = newProgress
+                    statusText.text = "✅ Дропс начисляется! Продолжаем $savedStreamer..."
+                    webView.loadUrl("https://www.twitch.tv/$savedStreamer")
+                }
+            }
+        }, 4000)
     }
 }
